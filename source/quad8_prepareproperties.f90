@@ -3,9 +3,9 @@
 !  static analyses as well as linearized stability analyses. It is inherently
 !  coupled to the open-source panel method APAME for providing fluid-structure-
 !  interaction capabilites.
-!    
+!
 !  Copyright (C) 2024 TUD Dresden University of Technology
-! 
+!
 !  This file is part of FiPPS².
 !
 !  FiPPS² is free software: you can redistribute it and/or modify
@@ -27,7 +27,7 @@
 !> Preperation of the 8-node shell element properties to avoid computational effort during the
 !> calculation of needed elemental data (striffness matrix a.s.o.)
 !
-!> @author Andreas Hauffe, TU Dresden, wiss. Mitarbeiter, 29.06.2010 
+!> @author Andreas Hauffe, TU Dresden, wiss. Mitarbeiter, 29.06.2010
 !
 !> $Id: quad8_prepareproperties.f90 484 2024-10-18 14:28:29Z s1080304 $
 !> $Author: s1080304 $
@@ -103,21 +103,21 @@ subroutine quad8_prepareProperties(fesim)
 
   ! Loop over all flat (reduced) quad8 elements
   do elem=1,size(fesim%elemente%quad8s,1)
-    
+
     propid = fesim%elemente%quad8s(elem)%pid
-    
+
     if (propid /= propm1) then
-  
+
       propType = 0
       int_pid  = 0
-         
+
       ! isotropic material
-      
+
       if (fesim%is_pshell == .true.) then
         do kk=1,size(fesim%eigenschaften%pshells,1)
 
           if (propid == fesim%eigenschaften%pshells(kk)%pid) then
-          
+
             propType = 1
             int_pid  = kk
 
@@ -129,61 +129,65 @@ subroutine quad8_prepareProperties(fesim)
                 exit
               end if
             end do
-            
+
             fesim%eigenschaften%pshells(kk)%weight = 0.d0
-             
+
           end if
         end do
       end if
-      
+
       ! layerwise othotropic material
-      
+
       if (fesim%is_pcomp == .true.) then
         do kk=1,size(fesim%eigenschaften%pcomps,1)
 
           if (propid == fesim%eigenschaften%pcomps(kk)%pid) then
-      
+
             ! Wenn zwei Properties gefunden wurden
             if (propType .NE. 0) then
               write(*,*) 'More than one property found for Quad8 element ', fesim%elemente%quad8s(elem)%eid
               err_code = 1
               goto 9999
             end if
-          
+
             propType = 2
             int_pid  = kk
 
-            call mat8(fesim,kk,fesim%eigenschaften%pcomps(kk)%lay,fesim%eigenschaften%pcomps(kk)%C,fesim%eigenschaften%pcomps(kk)%T,fesim%eigenschaften%pcomps(kk)%TInv,fesim%eigenschaften%pcomps(kk)%lth,fesim%eigenschaften%pcomps(kk)%ath,fesim%eigenschaften%pcomps(kk)%nop,fesim%eigenschaften%pcomps(kk)%angle,fesim%eigenschaften%pcomps(kk)%tth,fesim%eigenschaften%pcomps(kk)%penaltyStiffness,fesim%eigenschaften%pcomps(kk)%intMatID,fesim%eigenschaften%pcomps(kk)%areaWeight)
-            
+            call mat8(fesim,kk,fesim%eigenschaften%pcomps(kk)%lay,fesim%eigenschaften%pcomps(kk)%C,  &
+                fesim%eigenschaften%pcomps(kk)%T,fesim%eigenschaften%pcomps(kk)%TInv,fesim%eigenschaften%pcomps(kk)%lth,  &
+                fesim%eigenschaften%pcomps(kk)%ath,fesim%eigenschaften%pcomps(kk)%nop,fesim%eigenschaften%pcomps(kk)%angle,  &
+                fesim%eigenschaften%pcomps(kk)%tth,fesim%eigenschaften%pcomps(kk)%penaltyStiffness,  &
+                fesim%eigenschaften%pcomps(kk)%intMatID,fesim%eigenschaften%pcomps(kk)%areaWeight)
+
             fesim%eigenschaften%pcomps(kk)%weight = 0.d0
 
           end if
         end do
       end if
-      
+
       ! Wenn keine Property gefunden wurde
       if (propType .EQ. 0) then
         write(*,*) 'No Property found for Quad8 element ', fesim%elemente%quad8s(elem)%eid
         err_code = 2
         goto 9999
       end if
-      
+
       propm1 = propid
-      
+
     end if
-    
+
     fesim%elemente%quad8s(elem)%propType = propType
     fesim%elemente%quad8s(elem)%int_pid  = int_pid
-    
+
 
     do kk = 1,8
       node_coords(kk,1:3) = fesim%knoten%nodes(fesim%elemente%quad8s(elem)%nids(kk))%coords(1:3)
     end do
-    
+
     call quad8_area(node_coords,fesim%elemente%quad8s(elem)%area)
-    
+
   end do
-  
+
 !
 ! =================================================================================================
 !
@@ -192,13 +196,13 @@ subroutine quad8_prepareProperties(fesim)
 9999 continue
 
   if (err_code /= 0) then
-   
+
     write(*,*)                      'An error occured in subroutine'
     write(*,*)                      'quad8_prepareProperties'
     write(*,'(A,I2)',advance='YES') ' Errorcode: ', err_code
     write(*,*)                      'exit program '
     stop
-   
+
   end if
 
 end subroutine quad8_prepareProperties

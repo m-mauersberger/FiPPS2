@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+title: FiPPS²
+message: Please cite this repository as follows
+type: software
+authors:
+  - family-names: Rädel
+    given-names: Martin
+    orcid: 'https://orcid.org/0000-0002-3181-3202'
+  - family-names: Hauffe
+    given-names: Andreas
+    orcid: 'https://orcid.org/0000-0002-4246-6795'
+  - family-names: Dexl
+    given-names: Florian
+    orcid: 'https://orcid.org/0000-0001-6182-7341'
+repository-code: 'https://github.com/TUD-LFT/FiPPS2'
+keywords:
+  - Finite element method
+  - Finite element analysis
+  - Finite element solver
+license: GPL-3.0 license
+version: 2.0.451
+date-released: '2025-04-02'
+description: Finite Element solver FiPPS².

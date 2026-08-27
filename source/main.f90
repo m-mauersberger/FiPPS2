@@ -36,6 +36,7 @@ PROGRAM FiPPS
   use fesimulation_typen
   use pre_assemble_types
   use konstanten
+  use fipps_api
 !
 !
 #include "petsc/finclude/petscksp.h"
@@ -236,13 +237,13 @@ end interface
   !
   ! =================================================================================================
   !
-  ! Einlesen der Dateien des Problems
+  ! Definition des Problems (ersetzt das Einlesen der *.fipps-Dateien durch input_tf)
   !
   if (rank == 0) then
   
-    if (textoutput .eq. .true.) write(*,*) 'START - Lese Modell'
-    call input_tf (fesim)                                                       ! Einlesen der Inputdateien
-    if (textoutput .eq. .true.) write(*,*) 'ENDE  - Lese Modell'
+    if (textoutput .eq. .true.) write(*,*) 'START - Definiere Modell (fipps_api)'
+    call define_model(fesim)                                                    ! Modelldefinition via fipps_api
+    if (textoutput .eq. .true.) write(*,*) 'ENDE  - Definiere Modell (fipps_api)'
 
     call SYSTEM_CLOCK(startI1,ctrI1,ctmI1)
         
@@ -677,11 +678,279 @@ end interface
 
   call free_globals()
   call free_mem_fesim(fesim)
- 
+  
   call SlepcFinalize(ierr); CHKERRA(ierr)
 
 
 ! call SYSTEM_CLOCK(ende,ctr,ctm)
 ! 
 ! WRITE(*,*) 'Verwendete Zeit (s): ', (ende-start)/dble(ctr)
+
+contains
+
+  !
+  ! =================================================================================================
+  !
+  !> @brief
+  !> Modelldefinition via fipps_api (ersetzt die *.fipps-Eingabedateien)
+  !
+  !> @details
+  !> Diese Routine definiert das FE-Problem, das bisher ueber control.fipps
+  !> und die zugehoerigen *.fipps-Dateien eingelesen wurde (input_tf).
+  !> Jede Section entspricht einer der fruheren Dateien (siehe Modul
+  !> fipps_api in include/fipps_api.f90).
+  !>
+  !> Die hier eingebauten Daten sind ein Beispielsmodell (Kragarm-Balken):
+  !>   - 4 Knoten auf der x-Achse (Abstand 1 m)
+  !>   - 3 Balkenelemente (beam2), Stahl (mat1), quadratischer Querschnitt
+  !>   - Knoten 1 ist in allen 6 Freiheiten gefuehrt (spc1/spcadd)
+  !>   - Kraefte F = 100 N in -y-Richtung an Knoten 4
+  !>   - 1 statischer Subcase (sol=1)
+  !>
+  !> Erwartung: Spitzeilabwuegung ~ F*L^3/(3*E*I) = 5.14 mm in -y-Richtung.
+  !>
+  !> Fuer ein anderes Problem: die Arrays unten anpassen bzw. durch eigene
+  !> fipps_api-Aufrufe ersetzen.
+  !
+  subroutine define_model(fesim)
+
+    use fipps_api
+    use fesimulation_typen
+
+    implicit none
+
+    type(fe_simulation), intent(inout) :: fesim
+
+    integer, parameter        :: nnodes = 4
+    integer, parameter        :: nbeams = 3
+    integer, parameter        :: nspc   = 6
+
+    integer             :: err
+    integer             :: i
+
+    ! control.fipps
+    integer             :: sol(1)
+    logical             :: outputvtk(1), outputshort(1)
+
+    ! nodes.fipps
+    integer             :: cids(nnodes)
+    double precision    :: coords(3,nnodes)
+
+    ! mat1.fipps
+    integer             :: mids(1), fids(4,1)
+    double precision    :: yms(1), sms(1), nus(1), rhos(1), aths(1), trefs(1), ges(1)
+
+    ! pbeam.fipps
+    integer             :: pids(1), pmids(1)
+    double precision    :: aas(1), i11s(1), i22s(1), i12s(1), its(1), &
+                           & t1s(1), t2s(1), angles(1), nsms(1)
+
+    ! beam2.fipps
+    integer             :: b2_pids(nbeams), b2_nids(2,nbeams), b2_n0(nbeams)
+    double precision    :: b2_xis(3,nbeams)
+
+    ! spc1.fipps
+    integer             :: sids(nspc), dofs(nspc), n1s(nspc), nns(nspc)
+    logical             :: thrus(nspc)
+
+    ! spcadd.fipps
+    integer             :: scids_spc(1), sids_spc(1)
+
+    ! forces.fipps
+    integer             :: flids(1), fnids(1)
+    double precision    :: ffacs(1), fnis(3,1)
+
+    ! loads.fipps
+    integer             :: lcids(1), lides(1)
+    double precision    :: sfacis(1)
+
+    ! subcase.fipps
+    integer             :: scids(1), spcaddids(1), loadids(1), mpcaddids(1)
+    logical             :: skipbuck(1), upgeoms(1), upstresses(1), &
+                           & outputs(1), readapis(1)
+
+    !
+    ! =================================================================================================
+    !
+    ! Rechen- und Ausgabesteuerung (ersetzt control.fipps)
+    !
+    sol(1)         = 1           ! 1 - statisch, 2 - Eigenwertrechnung (Beulen)
+    outputvtk(1)   = .true.
+    outputshort(1) = .true.
+
+    !
+    ! =================================================================================================
+    !
+    ! Knoten (ersetzt nodes.fipps: "cid x y z", nid wird automatisch 1..n)
+    !
+    cids   = 0
+    coords = 0.d0
+    do i = 1, nnodes
+      coords(1,i) = dble(i-1)          ! x-Koordinate: 0, 1, 2, 3 m
+    end do
+    call fipps_api_nodes(fesim, cids, coords, err)
+    if (err .ne. 0) then
+      write(*,*) 'define_model: Fehler in fipps_api_nodes, err = ', err
+      stop
+    end if
+
+    !
+    ! =================================================================================================
+    !
+    ! Material mat1 (ersetzt mat1.fipps)
+    !
+    mids   = 1
+    yms    = 2.10d11                ! E-Modul [Pa]
+    sms    = 0.8077d11              ! Schermodul [Pa]
+    nus    = 0.3d0
+    rhos   = 7850.d0                ! Dichte [kg/m^3]
+    aths   = 0.d0
+    trefs  = 0.d0
+    ges    = 0.d0
+    fids   = 0
+    call fipps_api_mat1s(fesim, mids, yms, sms, nus, rhos, aths, trefs, ges, &
+                         & fids, err)
+    if (err .ne. 0) then
+      write(*,*) 'define_model: Fehler in fipps_api_mat1s, err = ', err
+      stop
+    end if
+
+    !
+    ! =================================================================================================
+    !
+    ! Balkeneigenschaft pbeam (ersetzt pbeam.fipps)
+    ! quadratischer Querschnitt 10 cm x 10 cm
+    !
+    pids   = 1
+    pmids  = 1
+    aas    = 1.0d-4                 ! Flaeche [m^2]
+    i11s   = 8.333333d-10            ! Izz [m^4]
+    i22s   = 8.333333d-10            ! Iyy [m^4]
+    i12s   = 0.d0
+    its    = 1.666667d-9             ! Torsionsstaekung [m^4]
+    t1s    = 0.01d0
+    t2s    = 0.01d0
+    angles = 0.d0
+    nsms   = 0.d0
+    call fipps_api_pbeams(fesim, pids, pmids, aas, i11s, i22s, i12s, its, &
+                          & t1s, t2s, angles, 'rad', nsms, err)
+    if (err .ne. 0) then
+      write(*,*) 'define_model: Fehler in fipps_api_pbeams, err = ', err
+      stop
+    end if
+
+    !
+    ! =================================================================================================
+    !
+    ! Balkenelemente beam2 (ersetzt beam2.fipps)
+    ! xi = 0 -> default-Orientierung (Elementachse = Verbindungsrichtung)
+    !
+    b2_pids = 1
+    b2_nids(1:2,1) = [1, 2]
+    b2_nids(1:2,2) = [2, 3]
+    b2_nids(1:2,3) = [3, 4]
+    b2_xis = 0.d0
+    b2_n0  = 0
+    call fipps_api_beam2s(fesim, b2_pids, b2_nids, b2_xis, b2_n0, err)
+    if (err .ne. 0) then
+      write(*,*) 'define_model: Fehler in fipps_api_beam2s, err = ', err
+      stop
+    end if
+
+    !
+    ! =================================================================================================
+    !
+    ! Fuhrungen spc1 (ersetzt spc1.fipps): Knoten 1, alle 6 Freiheiten
+    !
+    sids  = 1
+    do i = 1, nspc
+      dofs(i) = i
+      n1s(i)  = 1
+      nns(i)  = 1
+    end do
+    thrus = .false.
+    call fipps_api_spc1s(fesim, sids, dofs, n1s, thrus, nns, err)
+    if (err .ne. 0) then
+      write(*,*) 'define_model: Fehler in fipps_api_spc1s, err = ', err
+      stop
+    end if
+
+    !
+    ! =================================================================================================
+    !
+    ! Fuhrungszuordnung zum Subcase (ersetzt spcadd.fipps)
+    !
+    scids_spc = 1
+    sids_spc  = 1
+    call fipps_api_spcadds(fesim, scids_spc, sids_spc, err)
+    if (err .ne. 0) then
+      write(*,*) 'define_model: Fehler in fipps_api_spcadds, err = ', err
+      stop
+    end if
+
+    !
+    ! =================================================================================================
+    !
+    ! Krafte (ersetzt forces.fipps): 100 N in -y-Richtung an Knoten 4
+    !
+    flids = 1
+    fnids = 4
+    ffacs = 100.d0
+    fnis  = 0.d0
+    fnis(2,1) = -1.d0
+    call fipps_api_forces(fesim, flids, fnids, ffacs, fnis, err)
+    if (err .ne. 0) then
+      write(*,*) 'define_model: Fehler in fipps_api_forces, err = ', err
+      stop
+    end if
+
+    !
+    ! =================================================================================================
+    !
+    ! Lastfaelle (ersetzt loads.fipps)
+    !
+    lcids  = 1
+    sfacis = 1.d0
+    lides  = 1
+    call fipps_api_loads(fesim, lcids, sfacis, lides, err)
+    if (err .ne. 0) then
+      write(*,*) 'define_model: Fehler in fipps_api_loads, err = ', err
+      stop
+    end if
+
+    !
+    ! =================================================================================================
+    !
+    ! Subcases (ersetzt subcase.fipps)
+    !
+    scids     = 1
+    spcaddids = 1
+    loadids   = 1
+    mpcaddids = 0
+    skipbuck  = .false.
+    upgeoms   = .false.
+    upstresses= .false.
+    outputs   = .true.
+    readapis  = .false.
+    call fipps_api_subcases(fesim, scids, spcaddids, loadids, mpcaddids, &
+                            & skipbuck, upgeoms, upstresses, outputs, &
+                            & readapis, err)
+    if (err .ne. 0) then
+      write(*,*) 'define_model: Fehler in fipps_api_subcases, err = ', err
+      stop
+    end if
+
+    !
+    ! =================================================================================================
+    !
+    ! Konsistenzpruefung (entspricht den Pruefungen aus control.fipps)
+    !
+    call fipps_api_check(fesim, err)
+    if (err .ne. 0) then
+      write(*,*) 'define_model: Modelldefinition inkonsistent, err = ', err
+      stop
+    end if
+
+  end subroutine define_model
+
 END PROGRAM FiPPS
